@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Deezer Sidebar Artists
 // @namespace    https://github.com/tnodet/deezer-sidebar-shortcuts
-// @version      0.1
-// @date         2018-10-30
+// @version      0.2
+// @date         2018-11-06
 // @description  Add a shortcut for the 'Artists' page to Deezer's sidebar
 // @author       Tanguy Nodet
 // @include      https://www.deezer.com/*
@@ -13,52 +13,69 @@
 
 'use strict';
 
+/* We need to watch for a change in the URL in order to toggle the 'Artists' nav-link as active or not
+    https://stackoverflow.com/questions/6390341/how-to-detect-url-change-in-javascript
+    https://stackoverflow.com/questions/38667729/is-there-an-event-that-fires-when-url-changes
+    https://stackoverflow.com/questions/10419898/is-there-a-callback-for-history-pushstate/10419974#10419974
+   Possibilities:
+    - popstate: only works with browser controls (backwards/forwards buttons)
+        -> monkey-patch the history.pushState function
+    - polling: check every X ms for a change to window.location.href -> bad for performances
+*/
+
+//window.addEventListener('popstate', function(e){console.log('url changed')}); // only works for browser controls (e.g. back button)
+
+/* Monkey-patching of the history.pushState function */
+var pushState = history.pushState;
+history.pushState = function () {
+    pushState.apply(history, arguments);
+    urlChanged(arguments);  // our own event-handling function
+};
+
+
+var sidebarNavList; // global variable to keep track of the sidebar-nav-list
+
 // watch for creation of a 'ul' tag in the document
-document.arrive("ul", navListArriveListenner);
+document.arrive("ul", navListArrived);
+
 
 /* Callback function for 'ul' arrive.js watcher */
-function navListArriveListenner() {
+function navListArrived() {
     // Test if the sidebar-nav-list has been created
     if (this.classList.contains("sidebar-nav-list")) {
-        document.unbindArrive(navListArriveListenner); // unbind the arrive.js watcher
+        document.unbindArrive(navListArrived); // unbind the arrive.js watcher
         console.log("[DeezerSidebarArtists] nav-list arrived!");
         console.log(this);
+        sidebarNavList = this;
         sidebarAddArtists(this);    // call the function to add "Artists" to the sidebar-nav-list
+    }
+}
+
+/* Function called at each call of history.pushState (i.e. URL change) */
+function urlChanged(){
+    var pathArray = getPathArray();
+    console.log("[DeezerSidebarArtists] URL changed! New URL is: %s", pathArray.join('/'));
+    if(hasNavItemArtist(sidebarNavList)) {
+        handleArtistNavItemState(pathArray, getNavItemArtist(sidebarNavList), getUserId(sidebarNavList));
     }
 }
 
 
 function sidebarAddArtists(sidebarNavList) {
 
-    /*var hostname = window.location.hostname;
-    var pathname = window.location.pathname;
-    var pathArray = pathname.split('/');
-    var lang = pathArray[1];
+    pathArray = getPathArray();
+
+    var lang = pathArray[1]; // get current locale
+    var userId = getUserId(sidebarNavList);
     //console.log("[DeezerSidebarArtists] We are at %s%s - lang is %s", hostname, pathname, lang);*/
 
-    //var sidebar = document.getElementById("page_sidebar");
-    //var sidebarNavList = sidebar.getElementsbyClassName("sidebar-nav-list")[0];
-    //console.log("[DeezerSidebarArtists] There are %i elements in the nav-list: %s", sidebarNavList.childElementCount, sidebarNavList);
+    var hasArtistLink = hasNavItemArtist(sidebarNavList);
+    var navItemArtist = getNavItemArtist(sidebarNavList);
+    var navItemAlbum = getNavItemAlbum(sidebarNavList);
 
-    var hasArtistLink = false;
-    var navItemArtist;
-    var navItemAlbum;
 
     var linkPathArray;
-
-    /* Check if the "Artists" nav-item exists, get the "Artists" (if existing) and "Albums" nav-item */
-    for (var i = sidebarNavList.childNodes.length - 1; i >= 0; i--) {
-        //console.log(sidebarNavList.childNodes[i].getElementsByTagName("a")[0].getAttribute("href"));
-        linkPathArray = sidebarNavList.childNodes[i].getElementsByTagName("a")[0].getAttribute("href").split('/');
-        //console.log(linkPathArray);
-        if (linkPathArray[linkPathArray.length - 1] === "artists") {
-            hasArtistLink = true;
-            navItemArtist = sidebarNavList.childNodes[i];
-        } else if (linkPathArray[linkPathArray.length - 1] === "albums") {
-            navItemAlbum = sidebarNavList.childNodes[i];
-        }
-    }
-
+    
     /* If the "Artists" nav-item doesn't exist, create it and add it to the nav-list*/
     if (!hasArtistLink) {
 
@@ -82,9 +99,90 @@ function sidebarAddArtists(sidebarNavList) {
         /* Add the clone to the nav-list, after the "Albums" nav-item */
         navItemArtist = sidebarNavList.insertBefore(navItemClone, navItemAlbum.nextSibling)
 
+        console.log("[DeezerSidebarArtists] 'Artists' nav-item added!")
+
     }
+    handleArtistNavItemState(pathArray, navItemArtist, userId);
 
+}
+
+
+function getPathArray() {
+    return window.location.pathname.split('/');
+}
+
+
+function getSidebarNavList() {
+    var sidebar = document.getElementById("page_sidebar").getElementsbyClassName("sidebar-nav-list")[0];
+    //console.log("[DeezerSidebarArtists] There are %i elements in the nav-list: %s", sidebarNavList.childElementCount, sidebarNavList);
+}
+
+function getUserId(sidebarNavList) {
+    return sidebarNavList.childNodes[3].getElementsByTagName("a")[0].getAttribute("href").split('/')[3]; // get user id (from 'My Music' link)
+}
+
+function hasNavItemArtist(sidebarNavList) {
+     /* Check if the "Artists" nav-item exists */
+    var navItemArtist = getNavItemArtist(sidebarNavList);
+    return (navItemArtist === undefined ? false : true);
+}
+
+function getNavItemArtist(sidebarNavList) {
+    /* Return the "Artists" nav-item (if existing) */
+    return getNavItem(sidebarNavList, "artists");
+}
+
+function getNavItemAlbum(sidebarNavList) {
+    /* Return the "Albums" nav-item (if existing) */
+    return getNavItem(sidebarNavList, "albums");
+}
+
+function getNavItem(sidebarNavList, urlSuffix) {
+    var navItem;
+    /* Return the corresponding nav-item (if existing) */
+    for (var i = sidebarNavList.childNodes.length - 1; i >= 0; i--) {
+        linkPathArray = sidebarNavList.childNodes[i].getElementsByTagName("a")[0].getAttribute("href").split('/');
+        if (linkPathArray[linkPathArray.length - 1] === urlSuffix) {
+            navItem = sidebarNavList.childNodes[i];
+            break;  // end the for-loop
+        }
+    }
+    return navItem;
+}
+
+
+function handleArtistNavItemState(pathArray, navItemArtist, userId) {
     /* Set the "Artists" nav-item as active or inactive */
-    //TODO
+    handleNavItemState(pathArray, navItemArtist, "artists", userId);
+}
 
+function handleNavItemState(pathArray, navItem, urlSuffix, userId) {
+    var res;
+    /* Set a nav-item as active or inactive, depending on the current url */
+    //console.log("[DeezerSidebarArtists] url suffix = %s ; user id = %s", urlSuffix, userId);
+    if(pathArray[pathArray.length - 1] === urlSuffix && pathArray[pathArray.length - 2] == userId) {
+        // the URL is [...]/user-id/<urlSuffix>, set the corresponding nav-link as active
+        res = toggleNavItemActive(navItem, true); // force-add 'is-active' class
+    } else {
+        res = toggleNavItemActive(navItem, false); // force-remove 'is-active' class
+    }
+    var state;
+    (res ? state = "active" : state = "inactive");
+    console.log("[DeezerSidebarArtists] '%s' nav-item set as %s", navItem.firstChild.childNodes[1].innerText, state);
+}
+
+/**
+ * Toggles the 'is-active' class of the nav-link of a nav-item inside the nav-list.
+ *
+ * @param {Element} navItem - the nav-item list element which activeness should be toggled
+ * @param {Boolean} [force] - if unset, the 'activeness' is toggled; if set to true, the 'is-active' class is added; if set to false, the 'is-active' class is removed
+ * @ return true if 'is-active' was added, false if it was removed
+ */
+function toggleNavItemActive(navItem, force) {
+    var navLink = navItem.getElementsByTagName("a")[0];
+    if (force === undefined) {
+        return navLink.classList.toggle("is-active");
+    } else {
+        return navLink.classList.toggle("is-active", force);
+    }
 }
